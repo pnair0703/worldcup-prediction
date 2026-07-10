@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+*.joblib
+.next/
+node_modules/
+pipeline/data/*.parquet
