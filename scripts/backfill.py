@@ -28,8 +28,7 @@ from pipeline.features.build import build_features
 from pipeline.ingest.football_data import fetch_fixtures
 from pipeline.ingest.understat import fetch_epl_xg
 from pipeline.league import EPL, WORLD_CUP
-from pipeline.models import result as result_model
-from pipeline.models import scoreline as scoreline_model
+from pipeline.models import moe
 
 MODEL_VERSION = "v1"
 EPL_SEASONS = [2022, 2023, 2024]  # Understat seasons (year = season start)
@@ -49,27 +48,19 @@ def _upsert_and_map(conn, fixtures: list[dict]) -> dict:
     return id_map
 
 
-def _write_predictions(conn, feat_df: pd.DataFrame, upcoming_ids: list[int],
-                       league, result_probs: list[dict],
-                       scoreline_probs: list[dict],
-                       ou_probs: list[dict],
-                       btts_probs: list[dict]) -> None:
+def _write_predictions(conn, upcoming_ids: list[int], league,
+                       result_probs: list[dict], result_experts: list[str],
+                       scoreline_probs: list[dict], scoreline_experts: list[str],
+                       ou_probs: list[dict], btts_probs: list[dict]) -> None:
     for i, fid in enumerate(upcoming_ids):
-        r = result_probs[i]
-        _upsert_pred(conn, fid, "RESULT", r, MODEL_VERSION)
-
-        s = scoreline_probs[i]
-        _upsert_pred(conn, fid, "SCORELINE", s, MODEL_VERSION)
-
-        o = ou_probs[i]
-        _upsert_pred(conn, fid, "OVER_UNDER_2_5", o, MODEL_VERSION)
-
-        b = btts_probs[i]
-        _upsert_pred(conn, fid, "BTTS", b, MODEL_VERSION)
+        _upsert_pred(conn, fid, "RESULT", result_probs[i], MODEL_VERSION, result_experts[i])
+        _upsert_pred(conn, fid, "SCORELINE", scoreline_probs[i], MODEL_VERSION, scoreline_experts[i])
+        _upsert_pred(conn, fid, "OVER_UNDER_2_5", ou_probs[i], MODEL_VERSION, scoreline_experts[i])
+        _upsert_pred(conn, fid, "BTTS", btts_probs[i], MODEL_VERSION, scoreline_experts[i])
 
 
 def _upsert_pred(conn, fixture_id: int, market: str, probs: dict,
-                 model_version: str) -> None:
+                 model_version: str, expert_used: str | None = None) -> None:
     predicted = max(probs, key=probs.get)
     confidence = probs[predicted]
     upsert_prediction(conn, {
@@ -79,6 +70,7 @@ def _upsert_pred(conn, fixture_id: int, market: str, probs: dict,
         "predicted": predicted,
         "confidence": confidence,
         "model_version": model_version,
+        "expert_used": expert_used,
     })
 
 
@@ -187,11 +179,8 @@ def backfill_epl(conn) -> None:
     all_matches = pd.concat([hist_df, upcoming_df], ignore_index=True) if not upcoming_df.empty else hist_df
     feat_df = build_features(all_matches, EPL, xg_lookup)
 
-    # train models on finished rows
-    print("  Training EPL result model...")
-    result_model.train(feat_df, EPL)
-    print("  Training EPL scoreline model...")
-    scoreline_model.train(feat_df, EPL)
+    print("  Training EPL MoE experts...")
+    moe.train(feat_df, EPL)
 
     if upcoming_raw:
         upcom_feat = feat_df[feat_df["home_goals"].isna()].reset_index(drop=True)
@@ -199,12 +188,12 @@ def backfill_epl(conn) -> None:
                         if f["source_match_id"] in id_map]
 
         if len(upcom_feat) == len(upcoming_ids):
-            r_probs = result_model.predict_proba(upcom_feat, EPL)
-            s_probs = scoreline_model.predict_scoreline(upcom_feat, EPL)
-            o_probs = scoreline_model.predict_over_under(upcom_feat, EPL)
-            b_probs = scoreline_model.predict_btts(upcom_feat, EPL)
-            _write_predictions(conn, upcom_feat, upcoming_ids, EPL,
-                               r_probs, s_probs, o_probs, b_probs)
+            r_probs, r_experts = moe.predict_result(upcom_feat, EPL)
+            s_probs, s_experts = moe.predict_scoreline(upcom_feat, EPL)
+            o_probs = moe.predict_over_under(upcom_feat, EPL)
+            b_probs = moe.predict_btts(upcom_feat, EPL)
+            _write_predictions(conn, upcoming_ids, EPL,
+                               r_probs, r_experts, s_probs, s_experts, o_probs, b_probs)
             print(f"  Wrote predictions for {len(upcoming_ids)} EPL fixtures.")
 
 
@@ -249,19 +238,27 @@ def backfill_wc(conn) -> None:
         "home_goals": f["home_goals"],
         "away_goals": f["away_goals"],
         "neutral": True,
+        "stage": f.get("stage", "GROUP_STAGE"),
     } for f in all_raw])
 
     feat_df = build_features(matches_df, WORLD_CUP)
+    # carry stage through for MoE routing (not a model feature)
+    stage_map = {
+        (f["kickoff_utc"][:10], f["home_team"], f["away_team"]): f.get("stage")
+        for f in all_raw
+    }
+    feat_df["stage"] = feat_df.apply(
+        lambda r: stage_map.get((str(r["date"].date()), r["home_team"], r["away_team"])),
+        axis=1,
+    )
 
     finished_count = matches_df["home_goals"].notna().sum()
     if finished_count < 10:
         print(f"  Only {finished_count} finished WC matches — skipping training.")
         return
 
-    print("  Training WC result model...")
-    result_model.train(feat_df, WORLD_CUP)
-    print("  Training WC scoreline model...")
-    scoreline_model.train(feat_df, WORLD_CUP)
+    print("  Training WC MoE experts...")
+    moe.train(feat_df, WORLD_CUP)
 
     upcoming_raw = [f for f in all_raw if f["status"] == "SCHEDULED"]
     if not upcoming_raw:
@@ -269,16 +266,17 @@ def backfill_wc(conn) -> None:
         return
 
     upcom_feat = feat_df[feat_df["home_goals"].isna()].reset_index(drop=True)
-    upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_raw
-                    if f["source_match_id"] in id_map]
+    upcoming_valid = [f for f in upcoming_raw if f["source_match_id"] in id_map]
+    upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_valid]
+    upcoming_stages = [f.get("stage") for f in upcoming_valid]
 
     if len(upcom_feat) == len(upcoming_ids):
-        r_probs = result_model.predict_proba(upcom_feat, WORLD_CUP)
-        s_probs = scoreline_model.predict_scoreline(upcom_feat, WORLD_CUP)
-        o_probs = scoreline_model.predict_over_under(upcom_feat, WORLD_CUP)
-        b_probs = scoreline_model.predict_btts(upcom_feat, WORLD_CUP)
-        _write_predictions(conn, upcom_feat, upcoming_ids, WORLD_CUP,
-                           r_probs, s_probs, o_probs, b_probs)
+        r_probs, r_experts = moe.predict_result(upcom_feat, WORLD_CUP, upcoming_stages)
+        s_probs, s_experts = moe.predict_scoreline(upcom_feat, WORLD_CUP, upcoming_stages)
+        o_probs = moe.predict_over_under(upcom_feat, WORLD_CUP, upcoming_stages)
+        b_probs = moe.predict_btts(upcom_feat, WORLD_CUP, upcoming_stages)
+        _write_predictions(conn, upcoming_ids, WORLD_CUP,
+                           r_probs, r_experts, s_probs, s_experts, o_probs, b_probs)
         print(f"  Wrote predictions for {len(upcoming_ids)} WC fixtures.")
 
 

@@ -19,9 +19,10 @@ LABEL_TO_IDX = {"home": 0, "draw": 1, "away": 2}
 IDX_TO_LABEL = {v: k for k, v in LABEL_TO_IDX.items()}
 
 
-def _model_path(league_key: str) -> str:
+def _model_path(league_key: str, expert: str = "") -> str:
     os.makedirs(MODEL_DIR, exist_ok=True)
-    return os.path.join(MODEL_DIR, f"result_{league_key}_{MODEL_VERSION}.joblib")
+    suffix = f"_{expert}" if expert else ""
+    return os.path.join(MODEL_DIR, f"result_{league_key}{suffix}_{MODEL_VERSION}.joblib")
 
 
 def _make_label(row) -> str | None:
@@ -35,7 +36,7 @@ def _make_label(row) -> str | None:
     return "draw"
 
 
-def train(df: pd.DataFrame, league) -> None:
+def train(df: pd.DataFrame, league, expert: str = "") -> None:
     df = df.copy()
     df["_label"] = df.apply(_make_label, axis=1)
     df = df.dropna(subset=["_label"] + league.feature_columns)
@@ -58,20 +59,21 @@ def train(df: pd.DataFrame, league) -> None:
         n_jobs=-1,
     )
     model.fit(X, y)
-    joblib.dump(model, _model_path(league.key))
-    print(f"[result] trained {len(df)} rows → {_model_path(league.key)}")
+    path = _model_path(league.key, expert)
+    joblib.dump(model, path)
+    print(f"[result] trained {len(df)} rows → {path}")
 
 
-def predict_proba(df: pd.DataFrame, league) -> list[dict]:
+def predict_proba(df: pd.DataFrame, league, expert: str = "") -> list[dict]:
     """Return [{"home": p, "draw": p, "away": p}, ...] for each row."""
-    model = joblib.load(_model_path(league.key))
+    model = joblib.load(_model_path(league.key, expert))
     X = df[league.feature_columns].astype(float).values
-    probs = model.predict_proba(X)  # shape (n, 3); cols = [home, draw, away]
+    probs = model.predict_proba(X)
     return [
         {IDX_TO_LABEL[i]: round(float(p), 4) for i, p in enumerate(row)}
         for row in probs
     ]
 
 
-def model_exists(league_key: str) -> bool:
-    return os.path.exists(_model_path(league_key))
+def model_exists(league_key: str, expert: str = "") -> bool:
+    return os.path.exists(_model_path(league_key, expert))

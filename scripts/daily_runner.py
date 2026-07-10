@@ -23,8 +23,7 @@ from pipeline.features.build import build_features
 from pipeline.ingest.football_data import fetch_fixtures, utc_now_iso
 from pipeline.ingest.understat import fetch_epl_xg
 from pipeline.league import EPL, WORLD_CUP
-from pipeline.models import result as result_model
-from pipeline.models import scoreline as scoreline_model
+from pipeline.models import moe
 
 MODEL_VERSION = "v1"
 INGEST_WINDOW_DAYS = 10   # fetch ±10 days around today
@@ -39,7 +38,8 @@ def _date_window():
     )
 
 
-def _upsert_pred(conn, fixture_id: int, market: str, probs: dict) -> None:
+def _upsert_pred(conn, fixture_id: int, market: str, probs: dict,
+                 expert_used: str | None = None) -> None:
     predicted = max(probs, key=probs.get)
     upsert_prediction(conn, {
         "fixture_id": fixture_id,
@@ -48,6 +48,7 @@ def _upsert_pred(conn, fixture_id: int, market: str, probs: dict) -> None:
         "predicted": predicted,
         "confidence": probs[predicted],
         "model_version": MODEL_VERSION,
+        "expert_used": expert_used,
     })
 
 
@@ -72,7 +73,7 @@ def run_epl(conn) -> None:
         id_map[fx["source_match_id"]] = fid
     print(f"  upserted {len(fixtures_raw)} fixtures")
 
-    if not result_model.model_exists("EPL"):
+    if not moe.result_model.model_exists("EPL"):
         print("  No EPL model found — run scripts/backfill.py first.")
         return
 
@@ -99,7 +100,7 @@ def run_epl(conn) -> None:
         "neutral": False,
     } for f in fixtures_raw])
 
-    feat_df = build_features(matches_df, EPL, xg_lookup if xg_lookup else None)
+    feat_df = build_features(matches_df, EPL, xg_lookup or None)
 
     # 4. predict scheduled fixtures
     upcoming_raw = [f for f in fixtures_raw if f["status"] == "SCHEDULED"]
@@ -107,21 +108,19 @@ def run_epl(conn) -> None:
     upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_raw
                     if f["source_match_id"] in id_map]
 
-    if not upcoming_ids:
-        print(f"  no upcoming EPL fixtures in window")
-    elif len(upcom_feat) != len(upcoming_ids):
-        print(f"  WARNING: feature row count ({len(upcom_feat)}) != upcoming fixture count ({len(upcoming_ids)}) — skipping predictions")
-    else:
-        r_probs = result_model.predict_proba(upcom_feat, EPL)
-        s_probs = scoreline_model.predict_scoreline(upcom_feat, EPL)
-        o_probs = scoreline_model.predict_over_under(upcom_feat, EPL)
-        b_probs = scoreline_model.predict_btts(upcom_feat, EPL)
+    if upcoming_ids and len(upcom_feat) == len(upcoming_ids):
+        r_probs, r_experts = moe.predict_result(upcom_feat, EPL)
+        s_probs, s_experts = moe.predict_scoreline(upcom_feat, EPL)
+        o_probs = moe.predict_over_under(upcom_feat, EPL)
+        b_probs = moe.predict_btts(upcom_feat, EPL)
         for i, fid in enumerate(upcoming_ids):
-            _upsert_pred(conn, fid, "RESULT", r_probs[i])
-            _upsert_pred(conn, fid, "SCORELINE", s_probs[i])
-            _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i])
-            _upsert_pred(conn, fid, "BTTS", b_probs[i])
+            _upsert_pred(conn, fid, "RESULT", r_probs[i], r_experts[i])
+            _upsert_pred(conn, fid, "SCORELINE", s_probs[i], s_experts[i])
+            _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i], s_experts[i])
+            _upsert_pred(conn, fid, "BTTS", b_probs[i], s_experts[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
+    else:
+        print(f"  no upcoming EPL fixtures in window")
 
     # 5. grade finished predictions
     n = grade_league(conn, "EPL")
@@ -148,7 +147,7 @@ def run_wc(conn) -> None:
         id_map[fx["source_match_id"]] = fid
     print(f"  upserted {len(fixtures_raw)} fixtures")
 
-    if not result_model.model_exists("WORLD_CUP"):
+    if not moe.result_model.model_exists("WORLD_CUP"):
         print("  No WC model found — run scripts/backfill.py first.")
         return
 
@@ -167,21 +166,20 @@ def run_wc(conn) -> None:
     upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_raw
                     if f["source_match_id"] in id_map]
 
-    if not upcoming_ids:
-        print(f"  no upcoming WC fixtures in window")
-    elif len(upcom_feat) != len(upcoming_ids):
-        print(f"  WARNING: feature row count ({len(upcom_feat)}) != upcoming fixture count ({len(upcoming_ids)}) — skipping predictions")
-    else:
-        r_probs = result_model.predict_proba(upcom_feat, WORLD_CUP)
-        s_probs = scoreline_model.predict_scoreline(upcom_feat, WORLD_CUP)
-        o_probs = scoreline_model.predict_over_under(upcom_feat, WORLD_CUP)
-        b_probs = scoreline_model.predict_btts(upcom_feat, WORLD_CUP)
+    if upcoming_ids and len(upcom_feat) == len(upcoming_ids):
+        upcoming_stages = [f.get("stage") for f in upcoming_raw if f["source_match_id"] in id_map]
+        r_probs, r_experts = moe.predict_result(upcom_feat, WORLD_CUP, upcoming_stages)
+        s_probs, s_experts = moe.predict_scoreline(upcom_feat, WORLD_CUP, upcoming_stages)
+        o_probs = moe.predict_over_under(upcom_feat, WORLD_CUP, upcoming_stages)
+        b_probs = moe.predict_btts(upcom_feat, WORLD_CUP, upcoming_stages)
         for i, fid in enumerate(upcoming_ids):
-            _upsert_pred(conn, fid, "RESULT", r_probs[i])
-            _upsert_pred(conn, fid, "SCORELINE", s_probs[i])
-            _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i])
-            _upsert_pred(conn, fid, "BTTS", b_probs[i])
+            _upsert_pred(conn, fid, "RESULT", r_probs[i], r_experts[i])
+            _upsert_pred(conn, fid, "SCORELINE", s_probs[i], s_experts[i])
+            _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i], s_experts[i])
+            _upsert_pred(conn, fid, "BTTS", b_probs[i], s_experts[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
+    else:
+        print(f"  no upcoming WC fixtures in window")
 
     n = grade_league(conn, "WORLD_CUP")
     print(f"  graded {n} predictions")

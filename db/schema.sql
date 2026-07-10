@@ -35,11 +35,15 @@ CREATE TABLE IF NOT EXISTS predictions (
     predicted     TEXT        NOT NULL,    -- argmax label, for quick display/grading
     confidence    REAL        NOT NULL,    -- max prob, for the UI confidence bar
     model_version TEXT        NOT NULL,
+    expert_used   TEXT,                              -- MoE: which expert produced this prediction
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (fixture_id, market, model_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_predictions_fixture ON predictions (fixture_id);
+
+-- Add expert_used to existing deployments (idempotent)
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS expert_used TEXT;
 
 -- One row per graded prediction, written by the eval step once a match finishes.
 -- This table powers the live accuracy scoreboard.

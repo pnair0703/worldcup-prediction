@@ -19,12 +19,13 @@ MODEL_VERSION = "v1"
 MAX_GOALS = 6  # P(H=h, A=a) for h,a in 0..MAX_GOALS
 
 
-def _model_path(league_key: str) -> str:
+def _model_path(league_key: str, expert: str = "") -> str:
     os.makedirs(MODEL_DIR, exist_ok=True)
-    return os.path.join(MODEL_DIR, f"scoreline_{league_key}_{MODEL_VERSION}.joblib")
+    suffix = f"_{expert}" if expert else ""
+    return os.path.join(MODEL_DIR, f"scoreline_{league_key}{suffix}_{MODEL_VERSION}.joblib")
 
 
-def train(df: pd.DataFrame, league) -> None:
+def train(df: pd.DataFrame, league, expert: str = "") -> None:
     df = df.dropna(subset=["home_goals", "away_goals"] + league.feature_columns).copy()
     if len(df) < 30:
         raise ValueError(f"Too few training samples ({len(df)}) for {league.key}")
@@ -39,37 +40,28 @@ def train(df: pd.DataFrame, league) -> None:
                       ("poisson", PoissonRegressor(alpha=1.0, max_iter=1000))])
     reg_h.fit(X, y_h)
     reg_a.fit(X, y_a)
-    joblib.dump({"home": reg_h, "away": reg_a}, _model_path(league.key))
-    print(f"[scoreline] trained {len(df)} rows → {_model_path(league.key)}")
+    path = _model_path(league.key, expert)
+    joblib.dump({"home": reg_h, "away": reg_a}, path)
+    print(f"[scoreline] trained {len(df)} rows → {path}")
 
 
 def _dist(lh: float, la: float) -> dict:
     """Scoreline distribution for h, a in 0..MAX_GOALS, normalised."""
-    import math
-    if math.isnan(lh) or math.isnan(la) or math.isinf(lh) or math.isinf(la):
-        # diverged model — return uniform distribution as safe fallback
-        n = (MAX_GOALS + 1) ** 2
-        p = round(1.0 / n, 5)
-        return {f"{h}-{a}": p for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1)}
-    lh, la = max(lh, 0.01), max(la, 0.01)
     dist = {}
     for h in range(MAX_GOALS + 1):
         for a in range(MAX_GOALS + 1):
-            dist[f"{h}-{a}"] = float(poisson.pmf(h, lh) * poisson.pmf(a, la))
+            dist[f"{h}-{a}"] = float(poisson.pmf(h, max(lh, 0.01)) *
+                                     poisson.pmf(a, max(la, 0.01)))
     total = sum(dist.values())
-    if total == 0:
-        n = (MAX_GOALS + 1) ** 2
-        p = round(1.0 / n, 5)
-        return {k: p for k in dist}
     return {k: round(v / total, 5) for k, v in dist.items()}
 
 
-def _load(league_key: str):
-    return joblib.load(_model_path(league_key))
+def _load(league_key: str, expert: str = ""):
+    return joblib.load(_model_path(league_key, expert))
 
 
-def predict_scoreline(df: pd.DataFrame, league) -> list[dict]:
-    saved = _load(league.key)
+def predict_scoreline(df: pd.DataFrame, league, expert: str = "") -> list[dict]:
+    saved = _load(league.key, expert)
     X = df[league.feature_columns].astype(float).values
     lh = saved["home"].predict(X)
     la = saved["away"].predict(X)
@@ -94,5 +86,5 @@ def predict_btts(df: pd.DataFrame, league) -> list[dict]:
     return results
 
 
-def model_exists(league_key: str) -> bool:
-    return os.path.exists(_model_path(league_key))
+def model_exists(league_key: str, expert: str = "") -> bool:
+    return os.path.exists(_model_path(league_key, expert))

@@ -30,7 +30,7 @@ jobs:
           from pipeline.league import EPL, WORLD_CUP
           from pipeline.features.build import build_features
           from pipeline.eval.grade import grade_league
-          from pipeline.models import result, scoreline
+          from pipeline.models import result, scoreline, moe
           print('Python imports OK')
           "
 
@@ -55,5 +55,6 @@ jobs:
 
       - name: Type-check + build
         env:
-          DATABASE_URL: postgresql://placeholder/placeholder
+          DATABASE_URL: postgresql://placeholder:placeholder@placeholder.us-east-1.aws.neon.tech/neondb?sslmode=require
+          GROQ_API_KEY: placeholder
         run: npm run build

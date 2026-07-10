@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ChatWidget from "./components/ChatWidget";
 import FixtureCard from "./components/FixtureCard";
 import LeagueToggle from "./components/LeagueToggle";
 import Scoreboard from "./components/Scoreboard";
@@ -62,7 +63,7 @@ export default function Home() {
           Footy Oracle
         </h1>
         <p className="text-gray-400 text-sm">
-          XGBoost predictions · self-grading accuracy scoreboard · EPL + WC 2026
+          Mixture-of-Experts XGBoost · self-grading accuracy scoreboard · EPL + WC 2026
         </p>
       </div>
 
@@ -121,6 +122,8 @@ export default function Home() {
           </div>
         )}
       </section>
+
+      <ChatWidget />
     </main>
   );
 }

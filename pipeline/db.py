@@ -60,18 +60,19 @@ def upsert_prediction(conn, pred: dict) -> int:
         cur.execute(
             """
             INSERT INTO predictions
-                (fixture_id, market, probs, predicted, confidence, model_version)
+                (fixture_id, market, probs, predicted, confidence, model_version, expert_used)
             VALUES
                 (%(fixture_id)s, %(market)s, %(probs)s, %(predicted)s,
-                 %(confidence)s, %(model_version)s)
+                 %(confidence)s, %(model_version)s, %(expert_used)s)
             ON CONFLICT (fixture_id, market, model_version) DO UPDATE SET
-                probs      = EXCLUDED.probs,
-                predicted  = EXCLUDED.predicted,
-                confidence = EXCLUDED.confidence,
-                created_at = now()
+                probs       = EXCLUDED.probs,
+                predicted   = EXCLUDED.predicted,
+                confidence  = EXCLUDED.confidence,
+                expert_used = EXCLUDED.expert_used,
+                created_at  = now()
             RETURNING id;
             """,
-            {**pred, "probs": json.dumps(pred["probs"])},
+            {**pred, "probs": json.dumps(pred["probs"]), "expert_used": pred.get("expert_used")},
         )
         pred_id = cur.fetchone()[0]
     conn.commit()
