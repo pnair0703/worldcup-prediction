@@ -12,6 +12,8 @@ What it does:
   3. World Cup 2026: pull all matches from football-data.org → upsert →
      build features → train models → predict scheduled fixtures.
 """
+from __future__ import annotations
+
 import os
 import sys
 
@@ -31,7 +33,7 @@ from pipeline.league import EPL, WORLD_CUP
 from pipeline.models import moe
 
 MODEL_VERSION = "v1"
-EPL_SEASONS = [2022, 2023, 2024]  # Understat seasons (year = season start)
+EPL_SEASONS = [2022, 2023, 2024, 2025]  # Understat seasons (year = season start)
 WC_SEASON = "2026"
 
 

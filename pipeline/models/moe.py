@@ -66,15 +66,18 @@ def _train_epl(df: pd.DataFrame, league) -> None:
 
     df = df.copy()
     df["_dt"] = pd.to_datetime(df["date"])
-    cutoff = df["_dt"].max() - pd.Timedelta(days=RECENT_DAYS)
+    # base cutoff on the last FINISHED match, not upcoming fixtures which skew max date
+    finished_dates = df.loc[df["home_goals"].notna(), "_dt"]
+    cutoff = finished_dates.max() - pd.Timedelta(days=RECENT_DAYS)
     recent = df[df["_dt"] >= cutoff].drop(columns=["_dt"])
+    recent_finished = len(recent.dropna(subset=["home_goals"]))
 
-    if len(recent.dropna(subset=["home_goals"])) >= MIN_SAMPLES:
+    if recent_finished >= MIN_SAMPLES:
         result_model.train(recent, league, expert=RECENT_EXPERT)
         scoreline_model.train(recent, league, expert=RECENT_EXPERT)
-        print(f"  [moe] epl recent_expert trained on {len(recent.dropna(subset=['home_goals']))} rows")
+        print(f"  [moe] epl recent_expert trained on {recent_finished} rows")
     else:
-        print("  [moe] epl recent_expert skipped (too few rows)")
+        print(f"  [moe] epl recent_expert skipped ({recent_finished} finished rows in window)")
 
     result_model.train(df.drop(columns=["_dt"], errors="ignore"), league)
     scoreline_model.train(df.drop(columns=["_dt"], errors="ignore"), league)

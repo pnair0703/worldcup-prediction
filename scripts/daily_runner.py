@@ -5,6 +5,8 @@ Idempotent: all writes are upserts; safe to run multiple times per day.
 Run from the project root:
     python scripts/daily_runner.py
 """
+from __future__ import annotations
+
 import os
 import sys
 from datetime import datetime, timedelta, timezone
