@@ -19,7 +19,7 @@ interface PredictionRow {
 export async function GET(req: NextRequest) {
   const league = req.nextUrl.searchParams.get("league") ?? "EPL";
 
-  const rows = await sql<PredictionRow[]>`
+  const rows = (await sql`
     SELECT
       f.id           AS fixture_id,
       f.kickoff_utc,
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       AND f.kickoff_utc   > NOW() - INTERVAL '2 hours'
     ORDER BY f.kickoff_utc ASC, p.market
     LIMIT 200
-  `;
+  `) as PredictionRow[];
 
   // group by fixture
   const byFixture = new Map<

@@ -13,7 +13,7 @@ interface AccuracyRow {
 export async function GET(req: NextRequest) {
   const league = req.nextUrl.searchParams.get("league") ?? "EPL";
 
-  const rows = await sql<AccuracyRow[]>`
+  const rows = (await sql`
     SELECT
       market,
       COUNT(*)                                        AS total,
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
     WHERE league = ${league}
     GROUP BY market
     ORDER BY market
-  `;
+  `) as AccuracyRow[];
 
   const result = rows.map((r) => ({
     market: r.market,
