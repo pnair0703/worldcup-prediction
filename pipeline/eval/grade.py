@@ -21,7 +21,8 @@ def _actual(home_goals: int, away_goals: int, market: str) -> str:
     if market == "BTTS":
         return "yes" if (home_goals > 0 and away_goals > 0) else "no"
     if market == "SCORELINE":
-        return f"{home_goals}-{away_goals}"
+        # cap to MAX_GOALS=6 to match distribution keys; rare 7+ goal games map to edge bucket
+        return f"{min(home_goals, 6)}-{min(away_goals, 6)}"
     raise ValueError(f"Unknown market: {market}")
 
 

@@ -99,7 +99,7 @@ def run_epl(conn) -> None:
         "neutral": False,
     } for f in fixtures_raw])
 
-    feat_df = build_features(matches_df, EPL, xg_lookup or None)
+    feat_df = build_features(matches_df, EPL, xg_lookup if xg_lookup else None)
 
     # 4. predict scheduled fixtures
     upcoming_raw = [f for f in fixtures_raw if f["status"] == "SCHEDULED"]
@@ -107,7 +107,11 @@ def run_epl(conn) -> None:
     upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_raw
                     if f["source_match_id"] in id_map]
 
-    if upcoming_ids and len(upcom_feat) == len(upcoming_ids):
+    if not upcoming_ids:
+        print(f"  no upcoming EPL fixtures in window")
+    elif len(upcom_feat) != len(upcoming_ids):
+        print(f"  WARNING: feature row count ({len(upcom_feat)}) != upcoming fixture count ({len(upcoming_ids)}) — skipping predictions")
+    else:
         r_probs = result_model.predict_proba(upcom_feat, EPL)
         s_probs = scoreline_model.predict_scoreline(upcom_feat, EPL)
         o_probs = scoreline_model.predict_over_under(upcom_feat, EPL)
@@ -118,8 +122,6 @@ def run_epl(conn) -> None:
             _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i])
             _upsert_pred(conn, fid, "BTTS", b_probs[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
-    else:
-        print(f"  no upcoming EPL fixtures in window")
 
     # 5. grade finished predictions
     n = grade_league(conn, "EPL")
@@ -165,7 +167,11 @@ def run_wc(conn) -> None:
     upcoming_ids = [id_map[f["source_match_id"]] for f in upcoming_raw
                     if f["source_match_id"] in id_map]
 
-    if upcoming_ids and len(upcom_feat) == len(upcoming_ids):
+    if not upcoming_ids:
+        print(f"  no upcoming WC fixtures in window")
+    elif len(upcom_feat) != len(upcoming_ids):
+        print(f"  WARNING: feature row count ({len(upcom_feat)}) != upcoming fixture count ({len(upcoming_ids)}) — skipping predictions")
+    else:
         r_probs = result_model.predict_proba(upcom_feat, WORLD_CUP)
         s_probs = scoreline_model.predict_scoreline(upcom_feat, WORLD_CUP)
         o_probs = scoreline_model.predict_over_under(upcom_feat, WORLD_CUP)
@@ -176,8 +182,6 @@ def run_wc(conn) -> None:
             _upsert_pred(conn, fid, "OVER_UNDER_2_5", o_probs[i])
             _upsert_pred(conn, fid, "BTTS", b_probs[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
-    else:
-        print(f"  no upcoming WC fixtures in window")
 
     n = grade_league(conn, "WORLD_CUP")
     print(f"  graded {n} predictions")

@@ -45,12 +45,22 @@ def train(df: pd.DataFrame, league) -> None:
 
 def _dist(lh: float, la: float) -> dict:
     """Scoreline distribution for h, a in 0..MAX_GOALS, normalised."""
+    import math
+    if math.isnan(lh) or math.isnan(la) or math.isinf(lh) or math.isinf(la):
+        # diverged model — return uniform distribution as safe fallback
+        n = (MAX_GOALS + 1) ** 2
+        p = round(1.0 / n, 5)
+        return {f"{h}-{a}": p for h in range(MAX_GOALS + 1) for a in range(MAX_GOALS + 1)}
+    lh, la = max(lh, 0.01), max(la, 0.01)
     dist = {}
     for h in range(MAX_GOALS + 1):
         for a in range(MAX_GOALS + 1):
-            dist[f"{h}-{a}"] = float(poisson.pmf(h, max(lh, 0.01)) *
-                                     poisson.pmf(a, max(la, 0.01)))
+            dist[f"{h}-{a}"] = float(poisson.pmf(h, lh) * poisson.pmf(a, la))
     total = sum(dist.values())
+    if total == 0:
+        n = (MAX_GOALS + 1) ** 2
+        p = round(1.0 / n, 5)
+        return {k: p for k in dist}
     return {k: round(v / total, 5) for k, v in dist.items()}
 
 
