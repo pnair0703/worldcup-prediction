@@ -7,6 +7,7 @@ interface Segment {
 interface Props {
   probs: Record<string, number>;
   market: string;
+  teamNames?: { home: string; away: string };
 }
 
 const MARKET_COLORS: Record<string, Record<string, string>> = {
@@ -22,7 +23,14 @@ const MARKET_ORDER: Record<string, string[]> = {
   BTTS: ["yes", "no"],
 };
 
-export default function ConfidenceBar({ probs, market }: Props) {
+function resolveLabel(key: string, teamNames?: { home: string; away: string }): string {
+  if (!teamNames) return key;
+  if (key === "home") return teamNames.home;
+  if (key === "away") return teamNames.away;
+  return key;
+}
+
+export default function ConfidenceBar({ probs, market, teamNames }: Props) {
   if (market === "SCORELINE") {
     const top = Object.entries(probs)
       .sort((a, b) => b[1] - a[1])
@@ -46,7 +54,7 @@ export default function ConfidenceBar({ probs, market }: Props) {
   const colors = MARKET_COLORS[market] ?? {};
   const segments: Segment[] = order
     .filter((k) => k in probs)
-    .map((k) => ({ label: k, prob: probs[k], color: colors[k] ?? "#6b7280" }));
+    .map((k) => ({ label: resolveLabel(k, teamNames), prob: probs[k], color: colors[k] ?? "#6b7280" }));
 
   return (
     <div>

@@ -9,18 +9,23 @@ export const runtime = "edge";
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY ?? "" });
 
 const SYSTEM = `You are Footy Oracle's AI assistant — a football prediction expert powered by an
-XGBoost + Bivariate Poisson Mixture-of-Experts model trained on EPL and World Cup 2026 data.
+XGBoost + Bivariate Poisson Mixture-of-Experts model.
 
-You have tools to query live prediction data from the database. Always call a tool to get
-actual data before answering questions about specific matches or accuracy figures.
+TOOL USAGE RULES (follow strictly):
+- ANY question about upcoming matches, who will win, scores, or odds → call getUpcomingPredictions FIRST
+- ANY question about a specific team → call getTeamForm
+- ANY question about model accuracy, Brier score, or performance → call getModelAccuracy
+- ANY question about a specific fixture → call explainPrediction
+- NEVER answer prediction questions from memory — always query the database first
+- After calling a tool, summarise the data in 2-4 sentences max
 
-MoE routing context for your explanations:
-- EPL: "full" expert uses all 3 seasons of data (stronger when |elo_diff| > 150).
-       "recent" expert uses last 2 seasons (stronger for closely-matched teams).
-- WC:  "group" expert trained on group-stage matches (higher scoring, more draws).
-       "knockout" expert trained on knockout matches (tight, low-scoring).
+MoE routing context:
+- EPL: "full" expert = all 4 seasons (dominant when |elo_diff| > 150)
+       "recent" expert = last 2 seasons (dominant for evenly-matched teams)
+- WC:  "group" expert = trained on group-stage data
+       "knockout" expert = trained on knockout data (falls back to combined if < 20 samples)
 
-Be concise, cite confidence percentages, and mention the expert used when explaining predictions.`;
+Keep answers short and punchy. Lead with the prediction and confidence, then explain why.`;
 
 export async function POST(req: Request) {
   const { messages } = await req.json();

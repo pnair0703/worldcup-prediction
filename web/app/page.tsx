@@ -42,13 +42,16 @@ export default function Home() {
     setLoadingAccuracy(true);
     setError(null);
 
-    fetch(`/api/predictions?league=${league}`)
+    const apiLeague = league === "EPL_2026" ? "EPL" : league;
+    const seasonParam = league === "EPL_2026" ? "&season=2026" : "";
+
+    fetch(`/api/predictions?league=${apiLeague}${seasonParam}`)
       .then((r) => r.json())
       .then(setFixtures)
       .catch(() => setError("Failed to load predictions."))
       .finally(() => setLoadingFixtures(false));
 
-    fetch(`/api/accuracy?league=${league}`)
+    fetch(`/api/accuracy?league=${apiLeague}`)
       .then((r) => r.json())
       .then(setAccuracy)
       .catch(() => {})

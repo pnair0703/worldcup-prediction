@@ -60,6 +60,15 @@ export default function FixtureCard({ fixture }: { fixture: Fixture }) {
       <div className="flex flex-col gap-3">
         {markets.map((m) => {
           const pred = fixture.predictions[m];
+          const teamNames = { home: fixture.home_team, away: fixture.away_team };
+          const predictedLabel =
+            m === "RESULT"
+              ? pred.predicted === "home"
+                ? fixture.home_team
+                : pred.predicted === "away"
+                ? fixture.away_team
+                : "Draw"
+              : pred.predicted;
           return (
             <div key={m}>
               <div className="flex justify-between items-center mb-1">
@@ -68,14 +77,18 @@ export default function FixtureCard({ fixture }: { fixture: Fixture }) {
                 </span>
                 {m !== "SCORELINE" && (
                   <span className="text-xs text-gray-300">
-                    {pred.predicted} &middot;{" "}
+                    {predictedLabel} &middot;{" "}
                     <span className="font-semibold text-white">
                       {(pred.confidence * 100).toFixed(0)}%
                     </span>
                   </span>
                 )}
               </div>
-              <ConfidenceBar probs={pred.probs} market={m} />
+              <ConfidenceBar
+                probs={pred.probs}
+                market={m}
+                teamNames={m === "RESULT" ? teamNames : undefined}
+              />
             </div>
           );
         })}

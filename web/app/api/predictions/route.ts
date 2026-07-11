@@ -18,6 +18,7 @@ interface PredictionRow {
 
 export async function GET(req: NextRequest) {
   const league = req.nextUrl.searchParams.get("league") ?? "EPL";
+  const season = req.nextUrl.searchParams.get("season") ?? null;
 
   const rows = (await sql`
     SELECT
@@ -36,6 +37,7 @@ export async function GET(req: NextRequest) {
     WHERE f.league        = ${league}
       AND f.status        = 'SCHEDULED'
       AND f.kickoff_utc   > NOW() - INTERVAL '2 hours'
+      AND (${season} IS NULL OR f.season = ${season})
     ORDER BY f.kickoff_utc ASC, p.market
     LIMIT 200
   `) as PredictionRow[];
