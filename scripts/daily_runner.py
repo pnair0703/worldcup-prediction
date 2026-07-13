@@ -75,6 +75,11 @@ def run_epl(conn) -> None:
         id_map[fx["source_match_id"]] = fid
     print(f"  upserted {len(fixtures_raw)} fixtures")
 
+    if not fixtures_raw:
+        print("  no EPL fixtures in window — skipping predictions")
+        grade_league(conn, "EPL")
+        return
+
     if not moe.result_model.model_exists("EPL"):
         print("  No EPL model found — run scripts/backfill.py first.")
         return

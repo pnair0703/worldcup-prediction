@@ -31,7 +31,6 @@ export async function POST(req: Request) {
     system: SYSTEM,
     messages,
     maxSteps: 5,
-    toolChoice: "required",
     tools: {
       getUpcomingPredictions: tool({
         description: "Get upcoming fixture predictions for a league (EPL or WORLD_CUP)",
