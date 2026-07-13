@@ -9,6 +9,7 @@ It runs **two competitions through one engine**:
 - **EPL** — the durable flagship. Rich shot-level xG data, runs year-round.
 - **World Cup 2026** — a live "skin" on the same engine while the tournament is
   on (ends July 19, 2026). Thin international data, so it leans on Elo + form.
+- **EPL 2026/27** — upcoming season tab, same EPL engine, filtered by `season='2026'`.
 
 This doc is the source of truth. Build to it. Where it says STUBBED or TODO,
 that's work to do.
@@ -34,10 +35,10 @@ things that matter, in priority order:
    They communicate through Postgres. "I separated the offline pipeline from the
    online serving layer" is a strong interview line — preserve this split.
 
-Anti-goals: don't turn this into an LLM/agent project; don't call any upstream
-API's pre-baked predictions (e.g. some free football APIs ship their own
-CatBoost predictions — never use those, we BUILD the model); don't merge Python
-into the request path.
+Anti-goals: don't call any upstream API's pre-baked predictions (e.g. some
+free football APIs ship their own CatBoost predictions — never use those, we
+BUILD the model); don't merge Python into the request path. The chatbot is a
+thin UI layer that reads the database — it doesn't produce predictions.
 
 ---
 
@@ -49,7 +50,9 @@ into the request path.
 │   1. ingest  EPL (Understat xG + football-data.org fixtures)   │
 │              World Cup (football-data.org only)                │
 │   2. features (Elo + rolling form, + xG when available)        │
-│   3. predict every upcoming fixture × every market             │
+│   3. predict  via MoE coordinator (pipeline/models/moe.py)     │
+│              EPL:  full_expert + recent_expert (soft-routed)   │
+│              WC:   group_expert + knockout_expert (hard-routed) │
 │   4. grade  yesterday's now-finished fixtures vs reality       │
 │        │ writes via psycopg2                                   │
 │        ▼                                                       │
@@ -59,10 +62,18 @@ into the request path.
         │ reads via @neondatabase/serverless
 ┌─ Node (online serving + UI) ─ Next.js on Vercel ──────────────┐
 │   app/api/predictions  → upcoming fixtures + market probs     │
-│   app/api/accuracy      → scoreboard aggregates               │
-│   app/ (React)          → fixtures, confidence bars,          │
-│                            EPL/World Cup toggle, scoreboard    │
+│   app/api/accuracy     → scoreboard aggregates                │
+│   app/api/chat         → Groq streaming chatbot (edge fn)     │
+│                           reads DB via 4 tools; no own preds  │
+│   app/ (React)         → fixtures, confidence bars,           │
+│                           EPL / EPL 2026/27 / WC toggle,      │
+│                           accuracy scoreboard, chat widget     │
 └────────────────────────────────────────────────────────────────┘
+                                    │ LLM calls (streaming)
+                              ┌─────▼──────┐
+                              │  Groq API  │  llama-3.3-70b-versatile
+                              │ (free tier)│  500K tokens/day
+                              └────────────┘
 ```
 
 **Why this stack:** serverless Node front (impressive, zero infra), Python ML
@@ -78,9 +89,12 @@ makes the time-series accuracy queries trivial.
 | Data (xG)    | Understat (`understat` pylib)   | EPL only, free, no key |
 | Data (fixtures/results) | football-data.org API v4 | EPL (`PL`) + World Cup (`WC`); free key required |
 | Features/models | Python, pandas, scikit-learn, **XGBoost** | gradient-boosted, multiclass |
+| MoE coordinator | `pipeline/models/moe.py`    | soft-routes EPL experts; hard-routes WC experts by stage |
 | Store        | **Neon Postgres**               | serverless PG; Python writes, Node reads |
 | Serving + UI | **Next.js (App Router) on Vercel** | serverless API routes + React |
-| DB driver (Node) | `@neondatabase/serverless`  | HTTP driver, no pooling pain in serverless |
+| DB driver (Node) | `@neondatabase/serverless`  | HTTP driver; also works on edge runtime for chatbot tools |
+| Chatbot LLM  | **Groq** (`llama-3.3-70b-versatile`) | free tier, 500K tokens/day; streaming via Vercel AI SDK |
+| AI SDK       | `ai` + `@ai-sdk/groq`           | `streamText` + `useChat`; edge-compatible |
 | Scheduler    | **GitHub Actions cron**         | runs `daily_runner.py` daily |
 
 ---
@@ -88,50 +102,60 @@ makes the time-series accuracy queries trivial.
 ## 4. Repository layout
 
 ```
-footy-oracle/
+workout-prediction/
 ├── ARCHITECTURE.md            # this file
-├── README.md                  # TODO: user-facing, with arch diagram + live accuracy table
-├── .env.example               # TODO: list required env vars
+├── README.md
+├── .env.example               # DATABASE_URL, FOOTBALL_DATA_API_KEY, GROQ_API_KEY
 ├── db/
-│   └── schema.sql             # DONE: fixtures, predictions, grades
+│   └── schema.sql             # DONE: fixtures, predictions (+ expert_used), grades
 ├── pipeline/
 │   ├── league.py              # DONE: League abstraction (EPL has xG, WC doesn't)
-│   ├── db.py                  # DONE: psycopg2 helpers (upserts, fetch ungraded)
+│   ├── db.py                  # DONE: psycopg2 helpers; upsert_prediction includes expert_used
 │   ├── ingest/
 │   │   ├── football_data.py   # DONE: EPL + WC fixtures/results
 │   │   └── understat.py       # DONE: EPL shot-level xG
 │   ├── features/
 │   │   └── build.py           # DONE: Elo + rolling form/xG, leak-safe
 │   ├── models/
-│   │   ├── result.py          # TODO: match-result model (home/draw/away)
-│   │   ├── over_under.py      # STUB: O/U 2.5 goals
-│   │   ├── btts.py            # STUB: both teams to score
-│   │   └── scoreline.py       # STUB: Poisson scoreline
+│   │   ├── moe.py             # DONE: MoE coordinator — see §7a
+│   │   ├── result.py          # DONE: XGBoost multiclass; expert param selects model file
+│   │   ├── over_under.py      # DONE: O/U 2.5 (derived from Poisson scoreline)
+│   │   ├── btts.py            # DONE: BTTS (derived from Poisson scoreline)
+│   │   └── scoreline.py       # DONE: Bivariate Poisson; expert param selects model file
 │   └── eval/
-│       └── grade.py           # TODO: grade finished predictions, write Brier
+│       └── grade.py           # DONE: grade finished predictions, write Brier
 ├── scripts/
-│   ├── daily_runner.py        # TODO: orchestrates ingest→features→predict→grade
-│   └── backfill.py            # TODO: one-off historical load + initial train
-├── web/                       # TODO: Next.js app
+│   ├── daily_runner.py        # DONE: ingest→features→predict(MoE)→grade; idempotent
+│   └── backfill.py            # DONE: historical load + initial MoE train
+├── web/                       # Next.js on Vercel
+│   ├── package.json           # ai, @ai-sdk/groq, zod added
 │   ├── app/
-│   │   ├── page.tsx           # fixtures + predictions UI
-│   │   ├── api/predictions/route.ts
-│   │   ├── api/accuracy/route.ts
-│   │   └── components/        # FixtureCard, ConfidenceBar, Scoreboard, LeagueToggle
-│   └── lib/db.ts              # Neon client
+│   │   ├── page.tsx           # fixtures UI; handles EPL_2026 tab → season=2026 param
+│   │   ├── api/
+│   │   │   ├── predictions/route.ts  # ?league= &season= filtering
+│   │   │   ├── accuracy/route.ts
+│   │   │   └── chat/route.ts         # DONE: Groq streaming, edge runtime, 4 DB tools
+│   │   └── components/
+│   │       ├── ChatWidget.tsx        # DONE: floating ⚽ button + chat panel
+│   │       ├── FixtureCard.tsx       # resolves "home"/"away" → actual team names
+│   │       ├── ConfidenceBar.tsx     # teamNames prop for RESULT bars
+│   │       ├── LeagueToggle.tsx      # EPL | EPL 2026/27 | World Cup 2026
+│   │       └── Scoreboard.tsx
+│   └── lib/db.ts              # Neon serverless client (HTTP, edge-safe)
 ├── .github/workflows/
-│   ├── daily.yml              # TODO: cron → daily_runner
-│   └── ci.yml                 # TODO: lint + test on push
-└── requirements.txt           # TODO
+│   ├── daily.yml              # cron → daily_runner
+│   └── ci.yml                 # lint + import smoke test (includes moe)
+└── requirements.txt
 ```
 
 ### What already exists (read these first, build on them)
 - `db/schema.sql` — the three tables. Predictions store `probs` as JSONB so each
   market carries its own label set. `grades` powers the scoreboard.
+  `predictions.expert_used TEXT` records which MoE expert produced each prediction.
 - `pipeline/league.py` — the `League` dataclass. Models train on exactly
   `League.feature_columns`. Adding a competition = new ingester + new League.
 - `pipeline/db.py` — `get_conn`, `init_schema`, `upsert_fixture`,
-  `upsert_prediction`, `upsert_grade`, `fetch_finished_ungraded`.
+  `upsert_prediction` (now accepts `expert_used`), `upsert_grade`, `fetch_finished_ungraded`.
 - `pipeline/ingest/football_data.py` — `fetch_fixtures(league, date_from, date_to)`
   returns normalized fixture dicts. Reads `FOOTBALL_DATA_API_KEY`.
 - `pipeline/ingest/understat.py` — `fetch_epl_xg(season)` returns per-team,
@@ -140,6 +164,9 @@ footy-oracle/
   Elo with home-adv + margin-of-victory; rolling form. **Leak-safe**: state only
   updates on finished matches, so upcoming fixtures see only past info. Preserve
   this property in anything you add.
+- `pipeline/models/moe.py` — MoE coordinator. Call `moe.train(df, league)` and
+  `moe.predict_result(df, league, stages)` etc. from scripts; don't call individual
+  model files directly from scripts anymore.
 
 ---
 
@@ -188,11 +215,9 @@ Node never computes predictions — it only reads these tables.
 
 - **Markets share one feature matrix.** Build features once per fixture; each
   market is a different label/head over the same vector. Keep that factoring.
-- **Scoreline** is cleanest as a Poisson model: predict home/away expected goals,
-  derive a scoreline distribution, and you get O/U and BTTS *for free* by summing
-  the right cells. Consider making `scoreline.py` the base and deriving O/U + BTTS
-  from it rather than training them separately — stronger and more coherent. (Up
-  to you; the schema supports either.)
+- **Scoreline** is a Bivariate Poisson model: predict home/away expected goals,
+  derive a scoreline distribution. O/U and BTTS are derived from the same
+  distribution by summing cells — stronger and more coherent than separate heads.
 - **EPL vs WC honesty.** WC has no xG and little history — lean on Elo + recent
   international form, report calibration honestly, don't fake xG. The scoreboard
   will (correctly) show WC predictions as less sharp; that's a feature, not a bug.
@@ -200,34 +225,91 @@ Node never computes predictions — it only reads these tables.
   feature must respect this — never let an upcoming fixture see its own result or
   future matches.
 
+### 7a. Mixture-of-Experts (MoE)
+
+`pipeline/models/moe.py` is the single entry point for training and inference.
+Never call `result.py` or `scoreline.py` directly from scripts.
+
+**EPL — soft routing** on `|elo_diff|`:
+
+| Expert | Trained on | Weight formula |
+|--------|-----------|----------------|
+| `full` | all 4 historical seasons | `w = 0.3 + 0.4 × clamp((gap−50)/200, 0, 1)` |
+| `recent` | last 2 seasons (≥730 days from last finished match) | `1 − w` |
+
+When |elo_diff| < 50, both experts contribute equally (w≈0.3/0.7 toward recent).
+When |elo_diff| > 250, the full expert dominates (w=0.7). Minimum 20 finished
+matches required to train recent_expert; falls back to full_expert only if not met.
+
+**WC — hard routing** on the fixture's `stage` field:
+
+| Expert | Stage keywords | Fallback |
+|--------|---------------|---------|
+| `group` | anything not in knockout list | — |
+| `knockout` | ROUND_OF, QUARTER, SEMI, FINAL, PLAYOFF, KNOCKOUT | combined model if < 20 samples |
+
+Both leagues also train a combined model (no expert suffix) as the fallback base.
+
+**Model files** are saved as `result_{LEAGUE}_{expert}_v1.joblib`, e.g.:
+- `result_EPL_full_v1.joblib`, `result_EPL_recent_v1.joblib`, `result_EPL_v1.joblib`
+- `result_WORLD_CUP_group_v1.joblib`, `result_WORLD_CUP_v1.joblib`
+
+**Key implementation note:** the recent_expert cutoff is computed from
+`finished_dates.max()` (not `df["date"].max()`). Using all dates skews the max
+into the future (upcoming fixtures have future dates), shrinking the recent window
+incorrectly.
+
+**`expert_used`** is written to `predictions.expert_used` per row so the chatbot
+and the UI can surface which expert produced each prediction.
+
 ---
 
 ## 8. Environment variables
 
 | Var | Used by | How to get |
 |-----|---------|-----------|
-| `DATABASE_URL` | Python + Node | Neon project connection string (free tier) |
+| `DATABASE_URL` | Python + Node | Neon project → Connection string (free tier) |
 | `FOOTBALL_DATA_API_KEY` | Python | register free at football-data.org |
+| `GROQ_API_KEY` | Node (chatbot) | console.groq.com → API Keys (free, 500K tokens/day) |
 
-Put real values in `.env` (gitignored). For Vercel, set `DATABASE_URL` in
-project env vars. For GitHub Actions, set both as repo secrets.
+Put real values in `.env` (gitignored). Set all three in Vercel project env vars
+and as GitHub Actions repo secrets.
 
 **The author will create accounts and supply keys themselves** — do not attempt
 to register services or commit secrets.
 
+> **Security:** Never commit `.env` to git. If credentials are accidentally
+> committed, rotate them immediately: reset the Neon DB password, regenerate the
+> football-data.org API key, and regenerate the Groq API key. Then update Vercel
+> env vars and GitHub secrets with the new values.
+
 ---
 
-## 9. Definition of done (v1)
+## 9. Definition of done
 
-- [ ] Neon schema applied
-- [ ] EPL RESULT model trains and writes predictions for upcoming fixtures
-- [ ] World Cup RESULT predictions for the current knockout round
-- [ ] `daily_runner` runs end-to-end locally and is idempotent
-- [ ] Grading writes Brier + correctness for finished fixtures
-- [ ] Next.js app shows fixtures + predictions + confidence, with league toggle
-- [ ] Accuracy scoreboard reads from `grades` and renders per-market accuracy
-- [ ] GitHub Actions daily cron green
+### v1 — core pipeline ✅
+- [x] Neon schema applied (fixtures, predictions, grades + `expert_used`)
+- [x] EPL RESULT model trains and writes predictions for upcoming fixtures
+- [x] World Cup RESULT predictions for the current knockout round
+- [x] `daily_runner` runs end-to-end locally and is idempotent
+- [x] Grading writes Brier + correctness for finished fixtures
+- [x] Next.js app shows fixtures + predictions + confidence bars
+- [x] Team names shown in RESULT bars (not raw "home"/"away" labels)
+- [x] League toggle: Premier League | EPL 2026/27 | World Cup 2026
+- [x] Accuracy scoreboard reads from `grades` and renders per-market accuracy
+- [x] GitHub Actions daily cron green
+
+### v2 — MoE + chatbot ✅
+- [x] Bivariate Poisson scoreline model; O/U 2.5 + BTTS derived from same distribution
+- [x] MoE coordinator (`moe.py`): soft-routing for EPL, hard-routing for WC
+- [x] `expert_used` recorded per prediction in DB
+- [x] Groq chatbot with 4 DB-backed tools (predictions, form, accuracy, explain)
+- [x] ChatWidget floating UI with example prompts
+- [x] EPL 2026/27 season tab (filters by `season='2026'`)
+
+### Remaining / stretch
+- [ ] Credentials rotated after accidental git commit (Neon PW + football-data key + Groq key)
+- [ ] Predictions API 500 error investigated and fixed (Vercel function logs)
+- [ ] Calibration-by-confidence chart
 - [ ] README with architecture diagram + live accuracy table
-
-Stretch: scoreline-as-Poisson with O/U + BTTS derived; calibration-by-confidence
-chart; model versioning surfaced in the UI.
+- [ ] Model versioning surfaced in UI

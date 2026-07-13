@@ -20,27 +20,57 @@ export async function GET(req: NextRequest) {
   const league = req.nextUrl.searchParams.get("league") ?? "EPL";
   const season = req.nextUrl.searchParams.get("season") ?? null;
 
-  const rows = (await sql`
-    SELECT
-      f.id           AS fixture_id,
-      f.kickoff_utc,
-      f.home_team,
-      f.away_team,
-      f.stage,
-      p.market,
-      p.probs,
-      p.predicted,
-      p.confidence,
-      p.model_version
-    FROM fixtures f
-    JOIN predictions p ON p.fixture_id = f.id
-    WHERE f.league        = ${league}
-      AND f.status        = 'SCHEDULED'
-      AND f.kickoff_utc   > NOW() - INTERVAL '2 hours'
-      AND (${season} IS NULL OR f.season = ${season})
-    ORDER BY f.kickoff_utc ASC, p.market
-    LIMIT 200
-  `) as PredictionRow[];
+  let rows: PredictionRow[];
+  try {
+    rows = (await (season
+      ? sql`
+          SELECT
+            f.id           AS fixture_id,
+            f.kickoff_utc,
+            f.home_team,
+            f.away_team,
+            f.stage,
+            p.market,
+            p.probs,
+            p.predicted,
+            p.confidence,
+            p.model_version
+          FROM fixtures f
+          JOIN predictions p ON p.fixture_id = f.id
+          WHERE f.league      = ${league}
+            AND f.status      = 'SCHEDULED'
+            AND f.kickoff_utc > NOW() - INTERVAL '2 hours'
+            AND f.season      = ${season}
+          ORDER BY f.kickoff_utc ASC, p.market
+          LIMIT 200
+        `
+      : sql`
+          SELECT
+            f.id           AS fixture_id,
+            f.kickoff_utc,
+            f.home_team,
+            f.away_team,
+            f.stage,
+            p.market,
+            p.probs,
+            p.predicted,
+            p.confidence,
+            p.model_version
+          FROM fixtures f
+          JOIN predictions p ON p.fixture_id = f.id
+          WHERE f.league      = ${league}
+            AND f.status      = 'SCHEDULED'
+            AND f.kickoff_utc > NOW() - INTERVAL '2 hours'
+          ORDER BY f.kickoff_utc ASC, p.market
+          LIMIT 200
+        `)) as PredictionRow[];
+  } catch (err) {
+    console.error("[predictions] DB error:", err);
+    return NextResponse.json(
+      { error: "Database query failed", detail: String(err) },
+      { status: 500 }
+    );
+  }
 
   // group by fixture
   const byFixture = new Map<

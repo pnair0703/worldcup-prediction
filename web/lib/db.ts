@@ -1,6 +1,9 @@
 import { neon } from "@neondatabase/serverless";
 
-// DATABASE_URL must be set at runtime; validated here so API routes get a
-// clear error rather than a cryptic Neon connection failure.
-const sql = neon(process.env.DATABASE_URL ?? "postgresql://placeholder/placeholder");
+const url = process.env.DATABASE_URL;
+if (!url || url.includes("placeholder")) {
+  throw new Error("DATABASE_URL is not configured — set it in Vercel environment variables");
+}
+
+const sql = neon(url);
 export default sql;
