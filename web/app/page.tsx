@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import CalibrationChart from "./components/CalibrationChart";
 import ChatWidget from "./components/ChatWidget";
 import FixtureCard from "./components/FixtureCard";
 import LeagueToggle from "./components/LeagueToggle";
@@ -21,25 +22,34 @@ interface Fixture {
   predictions: Record<string, Prediction>;
 }
 
-interface AccuracyEntry {
+interface MarketMetrics {
   market: string;
-  total: number;
-  correct: number;
-  accuracy: number | null;
-  avg_brier: number | null;
+  n: number;
+  model: { accuracy: number; brier: number };
+  base_rate: { accuracy: number; brier: number };
+  naive: { accuracy: number | null; brier: number | null; label: string } | null;
+}
+
+interface CalibBucket {
+  label: string;
+  mid: number;
+  n: number;
+  mean_conf: number | null;
+  win_rate: number | null;
 }
 
 export default function Home() {
   const [league, setLeague] = useState("EPL");
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
-  const [accuracy, setAccuracy] = useState<AccuracyEntry[]>([]);
+  const [markets, setMarkets] = useState<MarketMetrics[]>([]);
+  const [calibration, setCalibration] = useState<CalibBucket[]>([]);
   const [loadingFixtures, setLoadingFixtures] = useState(true);
-  const [loadingAccuracy, setLoadingAccuracy] = useState(true);
+  const [loadingMetrics, setLoadingMetrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoadingFixtures(true);
-    setLoadingAccuracy(true);
+    setLoadingMetrics(true);
     setError(null);
 
     const apiLeague = league === "EPL_2026" ? "EPL" : league;
@@ -51,11 +61,11 @@ export default function Home() {
       .catch(() => setError("Failed to load predictions."))
       .finally(() => setLoadingFixtures(false));
 
-    fetch(`/api/accuracy?league=${apiLeague}`)
+    fetch(`/api/metrics?league=${apiLeague}`)
       .then((r) => r.json())
-      .then(setAccuracy)
+      .then((d) => { setMarkets(d.markets ?? []); setCalibration(d.calibration ?? []); })
       .catch(() => {})
-      .finally(() => setLoadingAccuracy(false));
+      .finally(() => setLoadingMetrics(false));
   }, [league]);
 
   return (
@@ -107,21 +117,30 @@ export default function Home() {
         )}
       </section>
 
-      {/* accuracy scoreboard */}
+      {/* accuracy scoreboard + calibration */}
       <section>
         <h2 className="text-lg font-semibold text-white mb-1">
           Accuracy Scoreboard
         </h2>
         <p className="text-xs text-gray-500 mb-4">
-          Live self-grading: every finished fixture is scored against actual
+          Model vs baselines — every finished fixture is scored against actual
           results. Brier score measures calibration (lower = better).
         </p>
 
-        {loadingAccuracy ? (
+        {loadingMetrics ? (
           <div className="h-32 animate-pulse bg-surface border border-border rounded-xl" />
         ) : (
-          <div className="bg-surface border border-border rounded-xl p-5">
-            <Scoreboard data={accuracy} />
+          <div className="space-y-4">
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <Scoreboard markets={markets} />
+            </div>
+
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <h3 className="text-sm font-semibold text-white mb-3">
+                Calibration — Reliability Diagram
+              </h3>
+              <CalibrationChart buckets={calibration} />
+            </div>
           </div>
         )}
       </section>
