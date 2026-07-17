@@ -127,7 +127,7 @@ def run_epl(conn) -> None:
             _upsert_pred(conn, fid, "BTTS", b_probs[i], s_experts[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
     else:
-        print(f"  no upcoming EPL fixtures in window")
+        print("  no upcoming EPL fixtures in window")
 
     # 5. grade finished predictions
     n = grade_league(conn, "EPL")
@@ -186,7 +186,7 @@ def run_wc(conn) -> None:
             _upsert_pred(conn, fid, "BTTS", b_probs[i], s_experts[i])
         print(f"  predicted {len(upcoming_ids)} upcoming fixtures")
     else:
-        print(f"  no upcoming WC fixtures in window")
+        print("  no upcoming WC fixtures in window")
 
     n = grade_league(conn, "WORLD_CUP")
     print(f"  graded {n} predictions")

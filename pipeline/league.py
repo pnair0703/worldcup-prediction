@@ -60,7 +60,7 @@ WORLD_CUP = League(
     feature_columns=_BASE_FEATURES,   # no xG: leans on Elo + form, the honest way
 )
 
-LEAGUES: dict[str, League] = {l.key: l for l in (EPL, WORLD_CUP)}
+LEAGUES: dict[str, League] = {lg.key: lg for lg in (EPL, WORLD_CUP)}
 
 
 def get_league(key: str) -> League:
