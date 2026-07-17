@@ -41,14 +41,15 @@ export async function POST(req: Request) {
           const rows = (await sql`
             SELECT
               f.home_team, f.away_team, f.kickoff_utc, f.stage,
-              p.market, p.predicted, p.confidence, p.probs, p.expert_used
+              p.market, p.predicted, p.confidence, p.expert_used
             FROM fixtures f
             JOIN predictions p ON p.fixture_id = f.id
             WHERE f.league = ${league}
               AND f.status = 'SCHEDULED'
               AND f.kickoff_utc > NOW() - INTERVAL '2 hours'
+              AND p.market != 'SCORELINE'
             ORDER BY f.kickoff_utc ASC, p.market
-            LIMIT 60
+            LIMIT 30
           `) as Array<Record<string, unknown>>;
           return rows;
         },
@@ -125,15 +126,16 @@ export async function POST(req: Request) {
           const rows = (await sql`
             SELECT
               f.home_team, f.away_team, f.kickoff_utc, f.stage,
-              p.market, p.probs, p.predicted, p.confidence, p.expert_used
+              p.market, p.predicted, p.confidence, p.expert_used
             FROM fixtures f
             JOIN predictions p ON p.fixture_id = f.id
             WHERE f.league = ${league}
               AND f.status = 'SCHEDULED'
+              AND p.market != 'SCORELINE'
               AND LOWER(f.home_team) LIKE ${"%" + home_team.toLowerCase() + "%"}
               AND LOWER(f.away_team) LIKE ${"%" + away_team.toLowerCase() + "%"}
             ORDER BY f.kickoff_utc ASC, p.market
-            LIMIT 10
+            LIMIT 8
           `) as Array<Record<string, unknown>>;
           return rows;
         },
